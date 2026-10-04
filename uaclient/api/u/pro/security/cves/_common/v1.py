@@ -595,7 +595,9 @@ def get_vulnerabilities(
     if not vulnerabilities_data.refreshed:
         if vulnerabilities_result.is_cache_valid():
             return VulnerabilityParserResult(
-                vulnerability_data_published_at=vulnerabilities_data.get_published_date(),  # noqa
+                vulnerability_data_published_at=vulnerabilities_json_data[
+                    "published_at"
+                ],
                 vulnerabilities_info=vulnerabilities_result.get_result_cache(),  # noqa
             )
 

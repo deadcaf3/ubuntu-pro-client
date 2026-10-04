@@ -4,8 +4,10 @@ import pytest
 from uaclient.api.u.pro.security.cves._common.v1 import (
     VulnerabilitiesAlreadyFixed,
     VulnerabilityParser,
+    VulnerabilityParserResult,
     VulnerabilityStatus,
     _get_vulnerability_fix_status,
+    get_vulnerabilities,
 )
 
 M_PATH = "uaclient.api.u.pro.security.cves._common.v1."
@@ -342,3 +344,91 @@ class TestVulnerabilitiesAlreadyFixed:
             vulnerabilities_already_fixed.add_vulnerability(*vulnerability)
 
         assert expected_result == vulnerabilities_already_fixed.to_dict()
+
+
+@mock.patch(M_PATH + "query_installed_source_pkg_versions")
+@mock.patch(M_PATH + "VulnerabilityResultCache.save_result_cache")
+@mock.patch(M_PATH + "VulnerabilityResultCache.get_result_cache")
+@mock.patch(M_PATH + "VulnerabilityResultCache.is_cache_valid")
+@mock.patch(M_PATH + "VulnerabilityData.get")
+@mock.patch(
+    M_PATH + "VulnerabilityData.refreshed",
+    new_callable=mock.PropertyMock,
+)
+class TestGetVulnerabilities:
+
+    def test_result_cache_used_when_data_not_refreshed(
+        self,
+        m_refreshed,
+        m_get,
+        m_is_cache_valid,
+        m_get_result_cache,
+        m_save_result_cache,
+        m_query_installed_pkgs,
+        FakeConfig,
+    ):
+        m_refreshed.return_value = False
+        m_get.return_value = {"published_at": "date"}
+        m_is_cache_valid.return_value = True
+        m_get_result_cache.return_value = mock.sentinel.result_cache
+        m_parser = mock.MagicMock(vulnerability_type="cves")
+
+        result = get_vulnerabilities(
+            parser=m_parser, cfg=FakeConfig(), series="noble"
+        )
+
+        assert (
+            VulnerabilityParserResult(
+                vulnerability_data_published_at="date",
+                vulnerabilities_info=mock.sentinel.result_cache,
+            )
+            == result
+        )
+        # The vulnerability data must only be loaded once
+        assert 1 == m_get.call_count
+        assert 0 == m_query_installed_pkgs.call_count
+        assert 0 == m_parser.get_vulnerabilities_for_installed_pkgs.call_count
+        assert 0 == m_save_result_cache.call_count
+
+    @pytest.mark.parametrize(
+        "refreshed,cache_valid",
+        (
+            (True, True),
+            (False, False),
+        ),
+    )
+    def test_data_parsed_when_result_cache_cannot_be_used(
+        self,
+        m_refreshed,
+        m_get,
+        m_is_cache_valid,
+        m_get_result_cache,
+        m_save_result_cache,
+        m_query_installed_pkgs,
+        refreshed,
+        cache_valid,
+        FakeConfig,
+    ):
+        m_refreshed.return_value = refreshed
+        m_get.return_value = mock.sentinel.vulnerabilities_data
+        m_is_cache_valid.return_value = cache_valid
+        m_query_installed_pkgs.return_value = mock.sentinel.installed_pkgs
+        m_parser = mock.MagicMock(vulnerability_type="cves")
+        m_parse = m_parser.get_vulnerabilities_for_installed_pkgs
+
+        result = get_vulnerabilities(
+            parser=m_parser, cfg=FakeConfig(), series="noble"
+        )
+
+        assert m_parse.return_value == result
+        assert 1 == m_get.call_count
+        assert 0 == m_get_result_cache.call_count
+        assert [
+            mock.call(
+                vulnerabilities_data=mock.sentinel.vulnerabilities_data,
+                installed_pkgs_by_source=mock.sentinel.installed_pkgs,
+            )
+        ] == m_parse.call_args_list
+        assert [
+            mock.call(m_parse.return_value.vulnerabilities_info)
+        ] == m_save_result_cache.call_args_list
